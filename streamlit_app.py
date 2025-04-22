@@ -71,7 +71,7 @@ with st.sidebar:
 
     # Stock & sellout toggle
     st.subheader("Opzioni Stock/Sellout")
-    enable_stock = st.checkbox("Mostra ama_stock_b2c e sellout_ivato")
+    enable_stock = st.checkbox("Mostra agrmkp_stock_qty e sellout_ivato")
 
     # Extra attributes picker
     extras = [c for c in df_cat.columns if c not in [code_column, title_column, cat_column, 'value_it']]
@@ -83,7 +83,7 @@ attrs = mapping.get(sel_cat, [])
 basic = [code_column, title_column, 'value_it']
 fixed = ['descrizione_estesa', 'brand', 'sell_out']
 if enable_stock:
-    fixed += [col for col in ['ama_stock_b2c', 'sellout_ivato'] if col in df_cat.columns]
+    fixed += [col for col in ['agrmkp_stock_qty', 'sellout_ivato'] if col in df_cat.columns]
 
 def has_values(col):
     return col in df_cat.columns and df_cat[col].notna().any()
