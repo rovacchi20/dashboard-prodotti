@@ -49,6 +49,7 @@ with st.sidebar:
     else:
         st.info("Carica i file sopra per configurare le colonne.")
         st.stop()
+
     st.markdown("---")
     st.markdown("## 📋 Filtri")
     # Load full data for filters
@@ -76,6 +77,16 @@ with st.sidebar:
     # Extra attributes picker
     extras = [c for c in df_cat.columns if c not in [code_column, title_column, cat_column, 'value_it']]
     extra_attrs = st.multiselect("Aggiungi Attributi Extra", options=extras)
+
+    # —— NUOVO: Filtro per valore sugli attributi extra ——
+    if extra_attrs:
+        st.subheader("Filtra Attributi Extra")
+        for attr in extra_attrs:
+            val = st.text_input(f"Inserisci valore per '{attr}'", key=f"filtro_{attr}")
+            if val:
+                # filtro semplice "contains"
+                df_cat = df_cat[df_cat[attr].astype(str).str.contains(val, case=False, na=False)]
+    # ——————————————————————————————————————————————
 
 # Main content
 # Build list of columns to display
