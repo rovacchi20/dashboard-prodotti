@@ -122,56 +122,68 @@ with tab1:
         use_container_width=True
     )
 
-# Tab 2: Ricerca
+# Tab 2: Ricerca con filtro a cascata
 with tab2:
     st.subheader("Ricerca Brand/Modello")
-    # Brand selector
+
+    # 1) Selectbox Brand
     if brand_cols:
         all_brands = sorted({
-            b.strip() for col in brand_cols
+            b.strip()
+            for col in brand_cols
             for cell in df_products[col].dropna().astype(str)
             for b in cell.split(',')
         })
-        sel_brand = st.selectbox("Brand", [''] + all_brands)
+        sel_brand = st.selectbox("Brand", [""] + all_brands)
     else:
-        sel_brand = ''
-    sel_mod = st.text_input("Modello / Riferimento")
+        sel_brand = ""
 
-    # Apply filters
-    df_search = df_products
+    # 2) Selectbox Modello / Riferimento (dipendente da Brand)
+    sel_mod = ""
+    if sel_brand:
+        # Data subset per brand
+        df_brand = df_products[
+            df_products[brand_cols]
+                .apply(lambda row: any(sel_brand.lower() in str(v).lower() for v in row), axis=1)
+        ]
+        all_refs = sorted({
+            ref.strip()
+            for col in reference_cols
+            for cell in df_brand[col].dropna().astype(str)
+            for ref in cell.split(',')
+        })
+        sel_mod = st.selectbox("Modello / Riferimento", [""] + all_refs)
+    else:
+        st.info("Seleziona prima un Brand per vedere i Modelli disponibili.")
+
+    # 3) Applica filtri
+    df_search = df_products.copy()
     if sel_brand:
         df_search = df_search[
-            df_search[brand_cols].apply(
-                lambda row: any(sel_brand.lower() in str(val).lower() for val in row), axis=1
-            )
+            df_search[brand_cols]
+                .apply(lambda row: any(sel_brand.lower() in str(v).lower() for v in row), axis=1)
         ]
     if sel_mod:
         df_search = df_search[
-            df_search[reference_cols].apply(
-                lambda row: any(sel_mod.lower() in str(val).lower() for val in row), axis=1
-            )
+            df_search[reference_cols]
+                .apply(lambda row: any(sel_mod.lower() in str(v).lower() for v in row), axis=1)
         ]
 
-    # Display search results
+    # 4) Visualizza risultati
     if df_search.empty:
         st.info("Nessun risultato trovato.")
     else:
-        # Extract reference for selected brand
         def get_ref(row):
-            for i, col in enumerate(brand_cols):
-                if sel_brand.lower() in str(row[col]).lower():
+            for i, bc in enumerate(brand_cols):
+                if sel_brand.lower() in str(row[bc]).lower():
                     return row[reference_cols[i]]
-            return ''
-
+            return ""
         df_search = df_search.assign(
-            Riferimento=df_search.apply(get_ref, axis=1),
-            Brand=sel_brand
+            Brand=sel_brand,
+            Riferimento=df_search.apply(get_ref, axis=1)
         )
         display_cols = ['product_code','titolo_prodotto','value_it','Brand','Riferimento']
-        st.dataframe(
-            df_search[display_cols].reset_index(drop=True),
-            use_container_width=True
-        )
+        st.dataframe(df_search[display_cols].reset_index(drop=True), use_container_width=True)
 
 st.markdown("---")
 st.markdown("<em>Powered by Streamlit</em>", unsafe_allow_html=True)
