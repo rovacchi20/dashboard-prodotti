@@ -112,7 +112,7 @@ with tab1:
     # Build display columns
     cols = ['product_code', 'titolo_prodotto', 'value_it'] + extras
     if mostra_stock:
-        for c in ['ama_stock_b2c','sellout_ivato']:
+        for c in ['agrmkp_stock_qty','sellout_ivato']:
             if c in df_cat.columns:
                 cols.append(c)
 
