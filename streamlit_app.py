@@ -116,7 +116,7 @@ for col in brand_cols + reference_cols:
     df_products[col] = df_products[col].astype('category')
 
 # Extend tabs to three
-tab1, tab2, tab3 = st.tabs(["📊 Dati", "🔍 Ricerca", "🚜 Applicazioni"])
+tab1, tab2, tab3 = st.tabs(["📊 Dati", "🔍 Rif. Originale", "🚜 Applicazioni"])
 
 # --- Tab 1: Dati ---
 with tab1:
