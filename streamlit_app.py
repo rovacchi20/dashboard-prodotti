@@ -168,7 +168,7 @@ with tab1:
     # 6) Costruisci colonne da mostrare
     cols = ['product_code', 'titolo_prodotto', 'value_it'] + extras
     if mostra_stock:
-        for c in ['ama_stock_b2c','sellout_ivato']:
+        for c in ['agrmkp_stock_qty','sellout_ivato']:
             if c in df_filtered.columns:
                 cols.append(c)
 
