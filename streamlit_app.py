@@ -100,8 +100,14 @@ if apps_file:
                     if ref:
                         apps.append({"sku": sku, "brand": r[bcol].strip(), "reference": ref})
     df_apps_long = pd.DataFrame(apps)
+    # qui mergiamo per aggiungere il titolo
+    df_apps_long = df_apps_long.merge(
+        df_products[['sku', 'titolo_prodotto']].drop_duplicates(),
+        on='sku',
+        how='left'
+    )
 else:
-    df_apps_long = pd.DataFrame(columns=["sku", "brand", "reference"])
+    df_apps_long = pd.DataFrame(columns=["sku", "brand", "reference", "titolo_prodotto"])
 
 # -------------------------------------------------------------------
 # Optimize dtypes
@@ -247,6 +253,7 @@ with tab2:
         display_cols = ['product_code','titolo_prodotto','value_it','Brand','Riferimento']
         st.dataframe(df_search[display_cols].reset_index(drop=True), use_container_width=True)
 
+# -------------------------------------------------------------------
 # New Tab 3 – Applicazioni Macchine
 with tab3:
     st.subheader("Applicazioni Macchine")
@@ -269,8 +276,12 @@ with tab3:
         sel_ref = st.selectbox("Riferimento", [""] + refs)
         if sel_ref:
             dff = dff[dff['reference'] == sel_ref]
-        # 4) Visualizza
-        st.dataframe(dff.reset_index(drop=True), use_container_width=True)
+        # 4) Visualizza includendo titolo_prodotto
+        display_cols = ['sku', 'titolo_prodotto', 'brand', 'reference']
+        st.dataframe(
+            dff[display_cols].reset_index(drop=True),
+            use_container_width=True
+        )
 
 st.markdown("---")
 st.markdown("<em>Powered by Streamlit</em>", unsafe_allow_html=True)
