@@ -14,115 +14,163 @@ st.markdown(
       h1 { font-size:2.5rem; color:#4B5563; margin-bottom:0.5rem; }
       .sidebar .sidebar-content { background-color:#F9FAFB; padding:1rem; border-radius:8px; }
       .stButton>button { background-color:#3B82F6; color:white; border-radius:6px; }
-      .stDownloadButton>button { background-color:#10B981; color:white; border-radius:6px; }
     </style>
-    """, unsafe_allow_html=True
+    """,
+    unsafe_allow_html=True
 )
 
-st.markdown("# 📦 Dashboard Prodotti Agristore")
-
-# Caching data loads for performance
-@st.cache_data
-def load_products(file):
-    df = pd.read_excel(file, dtype=str)
-    df['prod_stripped'] = df['product_code'].str.lstrip('0')
-    return df
-
-@st.cache_data
-def load_split(file):
-    split_dfs = pd.read_excel(file, sheet_name=None)
-    return pd.concat(split_dfs.values(), ignore_index=True)
-
-@st.cache_data
-def load_codes(file):
-    df = pd.read_json(file, dtype=str)
-    df['sku_stripped'] = df['sku'].str.lstrip('0')
-    return df
-
-# In the Sidebar, add file uploader for JSON Applicazioni Macchine
+# -------------------------------------------
+# Sidebar: Upload dei file
+# -------------------------------------------
 with st.sidebar:
     st.markdown("## 📤 Carica File")
-    products_file = st.file_uploader("Excel Prodotti", type=["xlsx","xls"])
-    split_file    = st.file_uploader("Excel Split by Category", type=["xlsx","xls"])
+    products_file = st.file_uploader("Excel Prodotti", type=["xlsx", "xls"])
+    split_file    = st.file_uploader("Excel Split by Category", type=["xlsx", "xls"])
     code_file     = st.file_uploader("JSON Codici Originali", type=["json"])
     apps_file     = st.file_uploader("JSON Applicazioni Macchine", type=["json"])
+    b2b_file      = st.file_uploader("Excel Prodotti B2B", type=["xlsx", "xls"])
 
-# Verify uploads
+# Stop if essential files missing
 if not products_file or not split_file:
     st.sidebar.warning("Carica i file Excel Prodotti e Split by Category per procedere.")
     st.stop()
 
-# Load data
-df_products = load_products(products_file)
-split_df    = load_split(split_file)
-
-# Precompute mapping
-mapping = {cat: grp['attributo'].tolist() for cat, grp in split_df.groupby('categoria')}
-
-# -------------------------------------------------------------------
-# Define a new function to load the Applicazioni Macchine JSON
+# -------------------------------------------
+# Data Loading Functions
+# -------------------------------------------
 @st.cache_data
-def load_apps(file):
+def load_excel(file):
+    return pd.read_excel(file, dtype=str)
+
+@st.cache_data
+def load_json(file):
     return pd.read_json(file, dtype=str)
 
-# -------------------------------------------------------------------
-# Merge JSON codes (existing code)
+# -------------------------------------------
+# Load Base DataFrames
+# -------------------------------------------
+df_products = load_excel(products_file)
+# Load split file with all sheets
+split_sheets = pd.read_excel(split_file, sheet_name=None, dtype=str)
+split_df = pd.concat(split_sheets.values(), ignore_index=True)
+
+# dopo aver concatenato split_df
+# split_df ha almeno due colonne: 'categoria' e 'attributo'
+mapping = split_df.groupby('categoria')['attributo'].apply(list).to_dict()
+
+
+# Prepare df_products
+if 'product_code' in df_products.columns:
+    df_products['prod_stripped'] = df_products['product_code'].str.lstrip('0')
+if 'value_it' in df_products.columns:
+    df_products['value_it'] = df_products['value_it'].astype('category')
+
+# Merge optional JSON codici
+brand_cols, reference_cols = [], []
 if code_file:
-    df_codes = load_codes(code_file)
+    df_codes = load_json(code_file)
+    df_codes['sku_stripped'] = df_codes['sku'].str.lstrip('0')
     df_products = df_products.merge(
-        df_codes,
-        left_on='prod_stripped',
-        right_on='sku_stripped',
-        how='left',
-        suffixes=("", "_json")
+        df_codes, left_on='prod_stripped', right_on='sku_stripped', how='left'
     )
-    brand_cols     = [c for c in df_codes.columns if c.startswith('brand')]
-    reference_cols = [c for c in df_codes.columns if c.startswith('reference')]
-    for col in brand_cols + reference_cols:
-        df_products[col] = df_products[col].fillna("").astype(str)
-else:
-    brand_cols     = []
-    reference_cols = []
+    brand_cols     = [c for c in df_codes if c.startswith('brand')]
+    reference_cols = [c for c in df_codes if c.startswith('reference')]
+    # Convert to category
+    for c in brand_cols+reference_cols:
+        df_products[c] = df_products[c].astype('category')
 
-# -------------------------------------------------------------------
-# Load and prepare the Applicazioni Macchine data right after the merge
+# Load optional JSON applicazioni corretto per tua struttura JSON
 if apps_file:
-    df_apps = load_apps(apps_file)
-    # trasforma brand/reference in righe separate
-    apps = []
-    for _, r in df_apps.iterrows():
-        sku = r['sku']
-        for i in range(1, 10):
-            bcol, rcol = f"brand{i}", f"reference{i}"
-            if bcol in r and pd.notna(r[bcol]) and r[bcol].strip():
-                for ref in str(r.get(rcol, "")).split(','):
-                    ref = ref.strip()
-                    if ref:
-                        apps.append({"sku": sku, "brand": r[bcol].strip(), "reference": ref})
-    df_apps_long = pd.DataFrame(apps)
-    # qui mergiamo per aggiungere il titolo
-    df_apps_long = df_apps_long.merge(
-        df_products[['sku', 'titolo_prodotto']].drop_duplicates(),
-        on='sku',
-        how='left'
-    )
+    df_apps = load_json(apps_file)
+
+    records = []
+    for _, row in df_apps.iterrows():
+        sku = row.get('sku', '').lstrip('0')
+        for i in range(1, 10):  # gestisce brand1-reference1, brand2-reference2, ecc.
+            brand = row.get(f'brand{i}')
+            references = row.get(f'reference{i}')
+
+            if brand and references:
+                references_list = [ref.strip() for ref in references.split(',')]
+                for ref in references_list:
+                    records.append({'sku': sku, 'brand': brand.strip(), 'reference': ref.strip()})
+
+    df_apps_long = pd.DataFrame(records)
 else:
-    df_apps_long = pd.DataFrame(columns=["sku", "brand", "reference", "titolo_prodotto"])
+    df_apps_long = pd.DataFrame(columns=['sku', 'brand', 'reference'])
 
-# -------------------------------------------------------------------
-# Optimize dtypes
-df_products['value_it'] = df_products['value_it'].astype('category')
-for col in brand_cols + reference_cols:
-    df_products[col] = df_products[col].astype('category')
 
-# Extend tabs to three
-tab1, tab2, tab3 = st.tabs(["📊 Dati", "🔍 Rif. Originale", "🚜 Applicazioni"])
 
-# --- Tab 1: Dati ---
+# -------------------------------------------
+# Load B2B DataFrames
+# -------------------------------------------
+if b2b_file:
+    df_b2b = load_excel(b2b_file)
+else:
+    df_b2b = pd.DataFrame(columns=df_products.columns.tolist())
+# Normalize and categorize
+if 'product_code' in df_b2b.columns:
+    df_b2b['prod_stripped'] = df_b2b['product_code'].str.lstrip('0')
+if 'value_it' in df_b2b.columns:
+    df_b2b['value_it'] = df_b2b['value_it'].astype('category')
+
+# Unique B2B (exclude existing)
+existing = set(df_products['prod_stripped'])
+df_b2b_unique = df_b2b[~df_b2b['prod_stripped'].isin(existing)].copy()
+if 'value_it' in df_b2b_unique.columns:
+    df_b2b_unique['value_it'] = df_b2b_unique['value_it'].astype('category')
+
+# -------------------------------------------
+# Utility to apply filters identical to Tab1
+# -------------------------------------------
+def apply_tab_filters(df, key_prefix):
+    # Category
+    if 'value_it' in df.columns:
+        sel_cat = st.selectbox(
+            "Categoria (value_it)",
+            options=list(df['value_it'].cat.categories),
+            key=f"{key_prefix}_cat"
+        )
+        df = df[df['value_it'] == sel_cat]
+    # Brand
+    if brand_cols:
+        all_brands = sorted({
+            b.strip() for c in brand_cols for cell in df[c].dropna().astype(str) for b in cell.split(',')
+        })
+        sel_brand = st.selectbox(
+            "Brand",
+            options=[""] + all_brands,
+            key=f"{key_prefix}_brand"
+        )
+        if sel_brand:
+            df = df[df[brand_cols].apply(
+                lambda row: sel_brand in [x.strip() for x in ','.join(map(str,row)).split(',')],
+                axis=1
+            )]
+    # Stock
+    if 'stock_qty' in df.columns:
+        if st.checkbox(
+            "Mostra solo in stock",
+            key=f"{key_prefix}_stock"
+        ):
+            df = df[df['stock_qty'].astype(int) > 0]
+    return df
+
+# -------------------------------------------
+# Tabs
+# -------------------------------------------
+tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    "📊 Dati",
+    "🔍 Rif. Originale",
+    "🚜 Applicazioni",
+    "📊 B2B (tutti)",
+    "📊 B2B (esclusivi)"
+])
+
 with tab1:
     st.subheader("Visualizzazione Prodotti")
 
-    # 1) Seleziona categoria e filtra sottoinsieme
+    # 1) Seleziona categoria
     sel_cat = st.selectbox(
         "Categoria (value_it)",
         options=list(df_products['value_it'].cat.categories)
@@ -155,15 +203,16 @@ with tab1:
     if extra_manual:
         extras = extras + [extra_manual]
 
-    # 5) Filtri a cascata
-    st.markdown("**Filtri**")
+    # 5) Filtri MULTIPLI AD ETICHETTA (multiselect)
+    st.markdown("**Filtri (multi-selezione)**")
     df_filtered = df_cat.copy()
     filter_cols = ['product_code', 'titolo_prodotto'] + extras
+
     for col in filter_cols:
         opts = sorted(df_filtered[col].dropna().astype(str).unique())
-        val = st.selectbox(f"Filtra {col}", options=[""] + opts, key=f"flt_{col}")
-        if val:
-            df_filtered = df_filtered[df_filtered[col].astype(str) == val]
+        vals = st.multiselect(f"Filtra {col}", options=opts, key=f"flt_{col}")
+        if vals:
+            df_filtered = df_filtered[df_filtered[col].astype(str).isin(vals)]
 
     # 6) Costruisci colonne da mostrare
     cols = ['product_code', 'titolo_prodotto', 'value_it'] + extras
@@ -178,7 +227,8 @@ with tab1:
         use_container_width=True
     )
 
-# --- Tab 2: Ricerca ---
+
+# Tab2 & Tab3: existing logic
 with tab2:
     st.subheader("Ricerca Brand/Modello")
 
@@ -253,13 +303,21 @@ with tab2:
         display_cols = ['product_code','titolo_prodotto','value_it','Brand','Riferimento']
         st.dataframe(df_search[display_cols].reset_index(drop=True), use_container_width=True)
 
-# -------------------------------------------------------------------
-# New Tab 3 – Applicazioni Macchine
+
+# Tab3: Applicazioni Macchine
 with tab3:
     st.subheader("Applicazioni Macchine")
     if df_apps_long.empty:
         st.info("Carica il file JSON Applicazioni Macchine per procedere.")
     else:
+        # Aggiungo titolo_prodotto da df_products tramite merge
+        df_apps_long = df_apps_long.merge(
+            df_products[['prod_stripped', 'titolo_prodotto']],
+            left_on='sku', 
+            right_on='prod_stripped',
+            how='left'
+        ).drop(columns=['prod_stripped'])
+
         # 1) Select SKU
         skus = sorted(df_apps_long['sku'].unique())
         sel_sku = st.selectbox("SKU", [""] + skus)
@@ -283,5 +341,91 @@ with tab3:
             use_container_width=True
         )
 
-st.markdown("---")
-st.markdown("<em>Powered by Streamlit</em>", unsafe_allow_html=True)
+
+
+# Tab4: B2B (tutti) with Tab1-style filters
+with tab4:
+    st.subheader("Tutti i Prodotti B2B")
+    if df_b2b.empty:
+        st.info("Carica il file Excel Prodotti B2B nella sidebar.")
+    else:
+        # Categoria filter
+        df_tmp = df_b2b.copy()
+        if 'value_it' in df_tmp.columns:
+            sel_cat_b2b = st.selectbox(
+                "Categoria (value_it)",
+                options=list(df_tmp['value_it'].cat.categories),
+                key="cat_b2b_all"
+            )
+            df_tmp = df_tmp[df_tmp['value_it'] == sel_cat_b2b]
+
+        # Brand filter (aggiunta verifica esistenza colonne)
+        existing_brand_cols = [col for col in brand_cols if col in df_tmp.columns]
+
+        if existing_brand_cols:
+            all_brands_b2b = sorted({
+                b.strip() 
+                for c in existing_brand_cols 
+                for cell in df_tmp[c].dropna().astype(str) 
+                for b in cell.split(',')
+            })
+            sel_brand_b2b = st.selectbox(
+                "Brand",
+                options=[""] + all_brands_b2b,
+                key="brand_b2b_all"
+            )
+            if sel_brand_b2b:
+                df_tmp = df_tmp[df_tmp[existing_brand_cols].apply(
+                    lambda row: sel_brand_b2b in [x.strip() for x in ','.join(map(str,row)).split(',')],
+                    axis=1
+                )]
+        else:
+            st.info("Le colonne Brand non sono presenti nel file B2B.")
+
+        # Stock filter
+        if 'stock_qty' in df_tmp.columns:
+            show_stock_b2b = st.checkbox(
+                "Mostra solo in stock", key="stock_b2b_all"
+            )
+            if show_stock_b2b:
+                df_tmp = df_tmp[df_tmp['stock_qty'].astype(int) > 0]
+
+        st.dataframe(
+            df_tmp.drop(columns=['prod_stripped'], errors='ignore').reset_index(drop=True),
+            use_container_width=True
+        )
+
+
+# Tab5: Prodotti B2B Esclusivi con filtro “Attributi Extra” e valori delle colonne
+with tab5:
+    st.subheader("Prodotti B2B Esclusivi")
+    if df_b2b_unique.empty:
+        st.info("Nessun prodotto esclusivo o file B2B non caricato.")
+    else:
+        df_exc = df_b2b_unique.copy()
+
+        # filtro su category_text
+        if 'category_text' in df_exc.columns:
+            opts = [''] + sorted(df_exc['category_text'].dropna().unique())
+            sel_cat = st.selectbox("category_text", opts, key="tab5_cat")
+            if sel_cat:
+                df_exc = df_exc[df_exc['category_text'] == sel_cat]
+
+        # rimuovo colonne totalmente vuote
+        df_exc = df_exc.loc[:, df_exc.notna().any()]
+
+        # selezione attributi extra
+        excluded = {'product_code','titolo_prodotto','value_it','stock_qty',
+                    'category_text','prod_stripped'}
+        attrs = [c for c in df_exc.columns if c not in excluded]
+        sel_attrs = st.multiselect("Attributi Extra (mappati)", options=attrs, key="tab5_attrs")
+
+        # per ogni attributo scelto, mostro un secondo filtro sui suoi valori
+        for a in sel_attrs:
+            vals = sorted(df_exc[a].dropna().unique())
+            sel_vals = st.multiselect(f"Valori {a}", options=vals, key=f"tab5_vals_{a}")
+            if sel_vals:
+                df_exc = df_exc[df_exc[a].isin(sel_vals)]
+
+        # visualizzo risultato
+        st.dataframe(df_exc.reset_index(drop=True), use_container_width=True)
