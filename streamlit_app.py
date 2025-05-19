@@ -341,8 +341,6 @@ with tab3:
             use_container_width=True
         )
 
-
-
 # Tab4: B2B (tutti) with Tab1-style filters
 with tab4:
     st.subheader("Tutti i Prodotti B2B")
@@ -429,3 +427,15 @@ with tab5:
 
         # visualizzo risultato
         st.dataframe(df_exc.reset_index(drop=True), use_container_width=True)
+
+# -------------------------------------------
+# Footer
+# -------------------------------------------
+st.markdown(
+    """
+    <footer style="text-align: center; padding: 1rem; background-color: #F9FAFB;">
+        <p style="color: #6B7280;">© 2025 Agristore. Tutti i diritti riservati.</p>
+    </footer>
+    """,
+    unsafe_allow_html=True
+)
