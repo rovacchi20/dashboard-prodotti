@@ -26,9 +26,10 @@ with st.sidebar:
     st.markdown("## 📤 Carica File")
     products_file = st.file_uploader("Excel Prodotti", type=["xlsx", "xls"])
     split_file    = st.file_uploader("Excel Split by Category", type=["xlsx", "xls"])
-    code_file     = st.file_uploader("JSON Codici Originali", type=["json"])
-    apps_file     = st.file_uploader("JSON Applicazioni Macchine", type=["json"])
+    ref_excel     = st.file_uploader("Excel Riferimenti Originali", type=["xlsx","xls"])
+    apps_excel    = st.file_uploader("Excel Applicazioni Macchine", type=["xlsx","xls"])
     b2b_file      = st.file_uploader("Excel Prodotti B2B", type=["xlsx", "xls"])
+    sap_file      = st.file_uploader("Excel Dati SAP", type=["xlsx","xls"])
 
 # Stop if essential files missing
 if not products_file or not split_file:
@@ -66,39 +67,69 @@ if 'value_it' in df_products.columns:
     df_products['value_it'] = df_products['value_it'].astype('category')
 
 # Merge optional JSON codici
+## Riferimenti Originali da Excel
 brand_cols, reference_cols = [], []
-if code_file:
-    df_codes = load_json(code_file)
-    df_codes['sku_stripped'] = df_codes['sku'].str.lstrip('0')
-    df_products = df_products.merge(
-        df_codes, left_on='prod_stripped', right_on='sku_stripped', how='left'
-    )
-    brand_cols     = [c for c in df_codes if c.startswith('brand')]
-    reference_cols = [c for c in df_codes if c.startswith('reference')]
-    # Convert to category
-    for c in brand_cols+reference_cols:
-        df_products[c] = df_products[c].astype('category')
+if ref_excel:
+    # 1) Leggi Excel
+    df_ref = load_excel(ref_excel)
 
-# Load optional JSON applicazioni corretto per tua struttura JSON
-if apps_file:
-    df_apps = load_json(apps_file)
+    # 2) Raggruppa per 'code' e crea brandN/referenceN dinamiche
+    records = []
+    for sku, grp in df_ref.groupby('code'):
+        entry = {'sku': sku}
+        for i, row in enumerate(grp.itertuples(index=False), start=1):
+            entry[f'brand{i}']     = row.company_name
+            entry[f'reference{i}'] = row.relation_code
+        records.append(entry)
+
+    # 3) DataFrame e normalizzazione SKU
+    df_codes = pd.DataFrame(records, dtype=str)
+    df_codes['sku_stripped'] = df_codes['sku'].str.lstrip('0')
+else:
+    st.sidebar.warning("Carica l'Excel dei Riferimenti Originali per procedere.")
+    st.stop()
+
+# 4) Merge con df_products
+df_products = df_products.merge(
+    df_codes,
+    left_on='prod_stripped',
+    right_on='sku_stripped',
+    how='left'
+)
+
+# 5) Identifica colonne dinamiche e converti in category
+brand_cols     = [c for c in df_codes.columns if c.startswith('brand')]
+reference_cols = [c for c in df_codes.columns if c.startswith('reference')]
+for c in brand_cols + reference_cols:
+    df_products[c] = df_products[c].astype('category')
+
+
+# ——— Applicazioni Macchine da Excel ———
+if apps_excel:
+    df_apps = load_excel(apps_excel)
 
     records = []
     for _, row in df_apps.iterrows():
-        sku = row.get('sku', '').lstrip('0')
-        for i in range(1, 10):  # gestisce brand1-reference1, brand2-reference2, ecc.
-            brand = row.get(f'brand{i}')
-            references = row.get(f'reference{i}')
+        # 1) tieni il codice così com'è (con zeri)
+        code = str(row['code'])
+        # 2) crei anche la versione stripped per il merge
+        sku_stripped = code.lstrip('0')
 
-            if brand and references:
-                references_list = [ref.strip() for ref in references.split(',')]
-                for ref in references_list:
-                    records.append({'sku': sku, 'brand': brand.strip(), 'reference': ref.strip()})
+        brand = str(row['company_name']).strip()
+        raw_refs = row.get('relation_code', '')
+        for ref in str(raw_refs).split(','):
+            if ref.strip():
+                records.append({
+                    'sku':           code,          # con zeri
+                    'sku_stripped':  sku_stripped,  # senza zeri
+                    'brand':         brand,
+                    'reference':     ref.strip()
+                })
 
     df_apps_long = pd.DataFrame(records)
 else:
-    df_apps_long = pd.DataFrame(columns=['sku', 'brand', 'reference'])
-
+    st.sidebar.warning("Carica l'Excel Applicazioni Macchine per procedere.")
+    st.stop()
 
 
 # -------------------------------------------
@@ -119,6 +150,12 @@ existing = set(df_products['prod_stripped'])
 df_b2b_unique = df_b2b[~df_b2b['prod_stripped'].isin(existing)].copy()
 if 'value_it' in df_b2b_unique.columns:
     df_b2b_unique['value_it'] = df_b2b_unique['value_it'].astype('category')
+
+# Load Dati SAP
+if sap_file:
+    df_sap = load_excel(sap_file)
+else:
+    df_sap = None
 
 # -------------------------------------------
 # Utility to apply filters identical to Tab1
@@ -159,39 +196,48 @@ def apply_tab_filters(df, key_prefix):
 # -------------------------------------------
 # Tabs
 # -------------------------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
     "📊 Dati",
     "🔍 Rif. Originale",
-    "🚜 Applicazioni",
+    "🚜 Applicazioni macchine",
     "📊 B2B (tutti)",
-    "📊 B2B (esclusivi)"
+    "📊 B2B (esclusivi)",
+    "📈 Dati SAP",
+    "📋 SAP esclusivi"
 ])
 
+# Tab1: Visualizzazione Prodotti
 with tab1:
     st.subheader("Visualizzazione Prodotti")
 
-    # 1) Seleziona categoria
-    sel_cat = st.selectbox(
-        "Categoria (value_it)",
-        options=list(df_products['value_it'].cat.categories)
-    )
-    df_cat = df_products[df_products['value_it'] == sel_cat]
+    # 1) Selezione categoria (solo se value_it esiste)
+    if 'value_it' in df_products.columns:
+        sel_cat = st.selectbox(
+            "Categoria (value_it)",
+            options=list(df_products['value_it'].cat.categories)
+        )
+        df_cat = df_products[df_products['value_it'] == sel_cat].copy()
+    else:
+        # se manca, lavoro sull'intero df
+        df_cat = df_products.copy()
 
-    # 2) Stock & sellout toggle
-    mostra_stock = st.checkbox("Mostra stock & sellout ivato")
+    # 2) Toggle sellout (non stock)
+    mostra_sellout = st.checkbox("Mostra sellout ivato")
 
     # 3) Attributi extra pre-mappati
-    available_attrs = [
-        attr for attr in mapping.get(sel_cat, [])
-        if attr in df_cat.columns and df_cat[attr].notna().any()
-    ]
+    available_attrs = []
+    if 'value_it' in df_products.columns:
+        available_attrs = [
+            attr for attr in mapping.get(sel_cat, [])
+            if attr in df_cat.columns and df_cat[attr].notna().any()
+        ]
     extras = st.multiselect(
         "Attributi Extra (mappati)",
         options=available_attrs,
         default=available_attrs
     )
 
-    # 4) Permetti di aggiungere UN SOLO attributo extra non mappato
+    # 4) Un solo attributo extra non mappato
     remaining = [
         col for col in df_products.columns
         if col not in ['product_code','titolo_prodotto','value_it'] + available_attrs
@@ -201,41 +247,41 @@ with tab1:
         options=[""] + remaining
     )
     if extra_manual:
-        extras = extras + [extra_manual]
+        extras.append(extra_manual)
 
-    # 5) Filtri MULTIPLI AD ETICHETTA (multiselect)
+    # 5) Filtri (multi-selezione) su product_code, titolo_prodotto e extras
     st.markdown("**Filtri (multi-selezione)**")
     df_filtered = df_cat.copy()
     filter_cols = ['product_code', 'titolo_prodotto'] + extras
-
     for col in filter_cols:
-        opts = sorted(df_filtered[col].dropna().astype(str).unique())
-        vals = st.multiselect(f"Filtra {col}", options=opts, key=f"flt_{col}")
-        if vals:
-            df_filtered = df_filtered[df_filtered[col].astype(str).isin(vals)]
+        if col in df_filtered.columns:
+            opts = sorted(df_filtered[col].dropna().astype(str).unique())
+            vals = st.multiselect(f"Filtra {col}", options=opts, key=f"flt_{col}")
+            if vals:
+                df_filtered = df_filtered[df_filtered[col].astype(str).isin(vals)]
 
-    # 6) Costruisci colonne da mostrare
-    cols = ['product_code', 'titolo_prodotto', 'value_it'] + extras
-    if mostra_stock:
-        for c in ['agrmkp_stock_qty','sellout_ivato']:
-            if c in df_filtered.columns:
-                cols.append(c)
+    # 6) Colonne da mostrare
+    display_cols = ['product_code', 'titolo_prodotto']
+    if 'value_it' in df_products.columns:
+        display_cols.append('value_it')
+    display_cols += extras
+    if mostra_sellout and 'sellout_ivato' in df_filtered.columns:
+        display_cols.append('sellout_ivato')
 
-    # 7) Display
+    # 7) Mostra tabella
     st.dataframe(
-        df_filtered[cols].reset_index(drop=True),
+        df_filtered[display_cols].reset_index(drop=True),
         use_container_width=True
     )
 
-
-# Tab2 & Tab3: existing logic
+# Tab2: Ricerca Brand/Modello
 with tab2:
     st.subheader("Ricerca Brand/Modello")
 
-    # 1) Brand
+    # 1) Selezione del Brand
     if brand_cols:
         all_brands = sorted({
-            b.strip()
+            b.strip().lower()
             for col in brand_cols
             for cell in df_products[col].dropna().astype(str)
             for b in cell.split(',')
@@ -244,12 +290,14 @@ with tab2:
     else:
         sel_brand = ""
 
-    # 2) Modello/Riferimento a cascata
-    sel_mod = ""
-    if sel_brand:
+    # Se non hai scelto il Brand, esci qui
+    if not sel_brand:
+        st.info("Seleziona prima un Brand per vedere i Modelli disponibili.")
+    else:
+        # 2) Selezione del Modello/Riferimento a cascata
         df_brand = df_products[
             df_products[brand_cols]
-                .apply(lambda row: any(sel_brand.lower() == str(v).strip().lower() for v in row), axis=1)
+                .apply(lambda row: sel_brand in [str(v).strip().lower() for v in row if isinstance(v, str)], axis=1)
         ]
         all_refs = sorted({
             ref.strip()
@@ -257,84 +305,73 @@ with tab2:
             for cell in df_brand[col].dropna().astype(str)
             for ref in cell.split(',')
         })
-        sel_mod = st.selectbox("Modello / Riferimento", [""] + all_refs, key=f"sel_mod_{sel_brand}")
-    else:
-        st.info("Seleziona prima un Brand per vedere i Modelli disponibili.")
+        sel_mod = st.selectbox("Modello / Riferimento", [""] + all_refs)
 
-    # 3) Prepara df_search
-    df_search = df_products.copy()
-    if sel_brand:
-        df_search = df_search[
-            df_search[brand_cols]
-                .apply(lambda row: any(sel_brand.lower() == str(v).strip().lower() for v in row), axis=1)
-        ]
-    if sel_mod:
-        df_search = df_search[
-            df_search[reference_cols]
-                .apply(
-                    lambda row: any(
-                        sel_mod == ref.strip()
-                        for cell in row
-                        for ref in str(cell).split(',')
-                        if ref.strip()
-                    ),
-                    axis=1
+        # Se non hai scelto il Modello, esci qui
+        if not sel_mod:
+            st.info("Seleziona un Modello / Riferimento per procedere.")
+        else:
+            # 3) Prepara df_search filtrando su Brand e su tutte le colonne referenceN
+            df_search = df_products.copy()
+            # filtro Brand
+            df_search = df_search[
+                df_search[brand_cols]
+                    .apply(lambda row: sel_brand in [str(v).strip().lower() for v in row if isinstance(v, str)], axis=1)
+            ]
+            # filtro Modello/Riferimento
+            mask_ref = df_search[reference_cols].eq(sel_mod).any(axis=1)
+            df_search = df_search[mask_ref].copy()
+
+            # aggiungo colonne fisse per visualizzazione
+            df_search['Brand'] = sel_brand
+            df_search['Riferimento'] = sel_mod
+
+            # 4) Mostra risultati
+            if df_search.empty:
+                st.info("Nessun risultato trovato.")
+            else:
+                display_cols = ['product_code', 'titolo_prodotto', 'value_it', 'Brand', 'Riferimento']
+                st.dataframe(
+                    df_search[display_cols].reset_index(drop=True),
+                    use_container_width=True
                 )
-        ]
-
-    # 4) Mostra risultati
-    if df_search.empty:
-        st.info("Nessun risultato trovato.")
-    else:
-        def get_ref(row):
-            for bcol, rcol in zip(brand_cols, reference_cols):
-                brands = [b.strip() for b in str(row[bcol]).split(',') if b.strip()]
-                if sel_brand in brands:
-                    for ref in [r.strip() for r in str(row[rcol]).split(',') if r.strip()]:
-                        if ref == sel_mod:
-                            return ref
-            return ""
-
-        df_search = df_search.assign(
-            Brand=sel_brand,
-            Riferimento=df_search.apply(get_ref, axis=1)
-        )
-
-        display_cols = ['product_code','titolo_prodotto','value_it','Brand','Riferimento']
-        st.dataframe(df_search[display_cols].reset_index(drop=True), use_container_width=True)
-
 
 # Tab3: Applicazioni Macchine
 with tab3:
     st.subheader("Applicazioni Macchine")
-    if df_apps_long.empty:
-        st.info("Carica il file JSON Applicazioni Macchine per procedere.")
-    else:
-        # Aggiungo titolo_prodotto da df_products tramite merge
-        df_apps_long = df_apps_long.merge(
-            df_products[['prod_stripped', 'titolo_prodotto']],
-            left_on='sku', 
-            right_on='prod_stripped',
-            how='left'
-        ).drop(columns=['prod_stripped'])
 
-        # 1) Select SKU
+    if df_apps_long.empty:
+        st.info("Carica l'Excel Applicazioni Macchine per procedere.")
+    else:
+        # 1) Selezione SKU (mostra con zeri)
         skus = sorted(df_apps_long['sku'].unique())
         sel_sku = st.selectbox("SKU", [""] + skus)
         dff = df_apps_long.copy()
         if sel_sku:
             dff = dff[dff['sku'] == sel_sku]
-        # 2) Select Brand a cascata
+
+        # 2) Selezione Brand a cascata
         brands = sorted(dff['brand'].unique())
-        sel_brand = st.selectbox("Brand", [""] + brands)
-        if sel_brand:
-            dff = dff[dff['brand'] == sel_brand]
-        # 3) Select Reference a cascata
+        sel_brand_app = st.selectbox("Brand", [""] + brands)
+        if sel_brand_app:
+            dff = dff[dff['brand'] == sel_brand_app]
+
+        # 3) Selezione Reference a cascata
         refs = sorted(dff['reference'].unique())
         sel_ref = st.selectbox("Riferimento", [""] + refs)
         if sel_ref:
             dff = dff[dff['reference'] == sel_ref]
-        # 4) Visualizza includendo titolo_prodotto
+
+        # 4) Aggiungi titolo_prodotto se mancante, mergeando su sku_stripped
+        if 'titolo_prodotto' not in dff.columns:
+            dff = dff.merge(
+                df_products[['prod_stripped', 'titolo_prodotto']],
+                left_on='sku_stripped',
+                right_on='prod_stripped',
+                how='left'
+            )
+
+        # 5) Visualizzazione
         display_cols = ['sku', 'titolo_prodotto', 'brand', 'reference']
         st.dataframe(
             dff[display_cols].reset_index(drop=True),
@@ -428,14 +465,84 @@ with tab5:
         # visualizzo risultato
         st.dataframe(df_exc.reset_index(drop=True), use_container_width=True)
 
+# Tab6: Dati SAP
+with tab6:
+    st.subheader("Dati SAP")
+    if df_sap is None:
+        st.info("Carica l'Excel Dati SAP nella sidebar per procedere.")
+    else:
+        # Partiamo da df_sap intero
+        df_sap_f = df_sap.copy()
+        st.markdown("**Filtri Dati SAP**")
+        # Per ogni colonna, offriamo un multiselect se ha pochi valori unici
+        for col in df_sap_f.columns:
+            vals = df_sap_f[col].dropna().unique().tolist()
+            # mostriamo il filtro solo se non è una colonna troppo variegata
+            if 1 < len(vals) <= 100:
+                sel = st.multiselect(f"Filtra {col}", options=sorted(vals), key=f"sap_{col}")
+                if sel:
+                    df_sap_f = df_sap_f[df_sap_f[col].isin(sel)]
+        # Visualizza
+        st.dataframe(df_sap_f.reset_index(drop=True), use_container_width=True)
+
+# Tab7: SKU in Dati SAP esclusivi (non in B2B)
+with tab7:
+    st.subheader("SKU SAP non presenti in B2B (tutti)")
+
+    # Controllo file caricati
+    if df_sap is None or b2b_file is None:
+        st.info("Carica sia l'Excel Dati SAP che l'Excel Prodotti B2B nella sidebar.")
+    else:
+        # 1) Prepara i codici per il confronto
+        df_sap_proc = df_sap.copy()
+        # rimuove eventuali caratteri non alfanumerici e gli zeri iniziali
+        df_sap_proc['sku_stripped'] = (
+            df_sap_proc['materialcode']
+              .str.replace(r'[^A-Za-z0-9]', '', regex=True)
+              .str.lstrip('0')
+        )
+
+        # 2) Prendi l'insieme di SKU B2B già caricati e normalizzati
+        b2b_skus = set(df_b2b['prod_stripped'])
+
+        # 3) Filtra quelli di SAP che NON sono in B2B
+        df_exclusive = df_sap_proc[
+            ~df_sap_proc['sku_stripped'].isin(b2b_skus)
+        ].copy()
+
+        # 4) Mostra la tabella
+        st.dataframe(
+            df_exclusive.reset_index(drop=True),
+            use_container_width=True
+        )
+
 # -------------------------------------------
 # Footer
 # -------------------------------------------
 st.markdown(
     """
-    <footer style="text-align: center; padding: 1rem; background-color: #F9FAFB;">
-        <p style="color: #6B7280;">© 2025 Agristore. Tutti i diritti riservati.</p>
-    </footer>
+   <footer style="
+  text-align: center;
+  padding: 1rem;
+  background-color: #111827;       /* sfondo scuro */
+">
+  <p style="
+    margin: 0;
+    color: #F3F4F6;                /* testo chiaro */
+    font-family: sans-serif;
+    font-size: 0.9rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+  ">
+    <!-- foglia verde come grafica semplice -->
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="#10B981" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12 2C8.13 2 5 5.13 5 9c0 4.97 7 13 7 13s7-8.03 7-13c0-3.87-3.13-7-7-7zm0 9.5c-1.38 0-2.5-1.12-2.5-2.5S10.62 6.5 12 6.5s2.5 1.12 2.5 2.5S13.38 11.5 12 11.5z"/>
+    </svg>
+    © 2025 Agristore. Tutti i diritti riservati.
+  </p>
+</footer>
+
     """,
     unsafe_allow_html=True
 )
