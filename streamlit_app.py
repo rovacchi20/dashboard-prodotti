@@ -158,6 +158,31 @@ else:
     df_sap = None
 
 # -------------------------------------------
+# Cached helpers
+# -------------------------------------------
+@st.cache_data
+def get_all_brands(dataframe, columns):
+    """Return the sorted unique brands available in *columns* of *dataframe*."""
+    return sorted({
+        b.strip()
+        for c in columns
+        for cell in dataframe[c].dropna().astype(str)
+        for b in cell.split(',')
+    })
+
+
+@st.cache_data
+def get_all_refs(dataframe, columns):
+    """Return the sorted unique references available in *columns* of *dataframe*."""
+    return sorted({
+        ref.strip()
+        for c in columns
+        for cell in dataframe[c].dropna().astype(str)
+        for ref in cell.split(',')
+    })
+
+
+# -------------------------------------------
 # Utility to apply filters identical to Tab1
 # -------------------------------------------
 def apply_tab_filters(df, key_prefix):
@@ -171,9 +196,7 @@ def apply_tab_filters(df, key_prefix):
         df = df[df['value_it'] == sel_cat]
     # Brand
     if brand_cols:
-        all_brands = sorted({
-            b.strip() for c in brand_cols for cell in df[c].dropna().astype(str) for b in cell.split(',')
-        })
+        all_brands = get_all_brands(df, brand_cols)
         sel_brand = st.selectbox(
             "Brand",
             options=[""] + all_brands,
@@ -280,12 +303,7 @@ with tab2:
 
     # 1) Selezione del Brand
     if brand_cols:
-        all_brands = sorted({
-            b.strip().lower()
-            for col in brand_cols
-            for cell in df_products[col].dropna().astype(str)
-            for b in cell.split(',')
-        })
+        all_brands = [b.lower() for b in get_all_brands(df_products, brand_cols)]
         sel_brand = st.selectbox("Brand", [""] + all_brands)
     else:
         sel_brand = ""
@@ -299,12 +317,7 @@ with tab2:
             df_products[brand_cols]
                 .apply(lambda row: sel_brand in [str(v).strip().lower() for v in row if isinstance(v, str)], axis=1)
         ]
-        all_refs = sorted({
-            ref.strip()
-            for col in reference_cols
-            for cell in df_brand[col].dropna().astype(str)
-            for ref in cell.split(',')
-        })
+        all_refs = get_all_refs(df_brand, reference_cols)
         sel_mod = st.selectbox("Modello / Riferimento", [""] + all_refs)
 
         # Se non hai scelto il Modello, esci qui
